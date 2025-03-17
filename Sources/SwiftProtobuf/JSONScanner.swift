@@ -1154,7 +1154,120 @@ internal struct JSONScanner {
         guard hasMoreContent else {
             throw JSONDecodingError.truncated
         }
-        return try parseBytes(source: source, index: &index, end: source.endIndex)
+        if options.isTrxHttp {
+            return try parseHexBytes(source: source, index: &index, end: source.endIndex)
+        } else {
+            return try parseBytes(source: source, index: &index, end: source.endIndex)
+        }
+    }
+    
+    internal mutating func nextHexBytesValue() throws -> Data {
+        skipWhitespace()
+        guard hasMoreContent else {
+            throw JSONDecodingError.truncated
+        }
+        return try parseHexBytes(source: source, index: &index, end: source.endIndex)
+    }
+    
+    private func parseHexBytes(
+        source: UnsafeRawBufferPointer,
+        index: inout UnsafeRawBufferPointer.Index,
+        end: UnsafeRawBufferPointer.Index
+    ) throws -> Data {
+        let c = source[index]
+        if c != asciiDoubleQuote {
+            throw JSONDecodingError.malformedString
+        }
+        source.formIndex(after: &index)
+
+        let digitsStart = index
+        var rawChars = 0
+        
+        // First pass to count hex characters
+        while index != end {
+            let digit = source[index]
+            if digit == asciiDoubleQuote {
+                break
+            }
+
+            if digit == asciiBackslash {
+                source.formIndex(after: &index)
+                if index == end {
+                    throw JSONDecodingError.malformedString
+                }
+                let escaped = source[index]
+                if escaped != asciiForwardSlash {
+                    throw JSONDecodingError.malformedString
+                }
+            }
+            
+            if isHexDigit(digit) {
+                rawChars += 1
+            }
+            source.formIndex(after: &index)
+        }
+
+        if index == end || rawChars % 2 != 0 {
+            throw JSONDecodingError.malformedString
+        }
+
+        // Create the correct size Data object
+        var value = Data(count: rawChars / 2)
+        
+        // Second pass to parse hex data
+        index = digitsStart
+        try value.withUnsafeMutableBytes { (body: UnsafeMutableRawBufferPointer) in
+            if var p = body.baseAddress?.assumingMemoryBound(to: UInt8.self) {
+                var currentByte: UInt8 = 0
+                var isFirstNibble = true
+                
+                while true {
+                    let digit = source[index]
+                    if digit == asciiDoubleQuote {
+                        break
+                    }
+                    
+                    if digit == asciiBackslash {
+                        source.formIndex(after: &index)
+                        continue
+                    }
+                    
+                    if let nibble = hexDigitToValue(digit) {
+                        if isFirstNibble {
+                            currentByte = nibble << 4
+                        } else {
+                            currentByte |= nibble
+                            p.pointee = currentByte
+                            p += 1
+                        }
+                        isFirstNibble.toggle()
+                    }
+                    source.formIndex(after: &index)
+                }
+            }
+        }
+        
+        source.formIndex(after: &index)
+        return value
+    }
+
+    private func isHexDigit(_ ascii: UInt8) -> Bool {
+        return (ascii >= 48 && ascii <= 57) ||  // 0-9
+               (ascii >= 65 && ascii <= 70) ||  // A-F
+               (ascii >= 97 && ascii <= 102)    // a-f
+    }
+
+    private func hexDigitToValue(_ ascii: UInt8) -> UInt8? {
+        switch ascii {
+        case 48...57:   // 0-9
+            return ascii - 48
+        case 65...70:   // A-F
+            return ascii - 55
+        case 97...102:  // a-f
+            return ascii - 87
+        default:
+            return nil
+        }
     }
 
     /// Private function to help parse keywords.

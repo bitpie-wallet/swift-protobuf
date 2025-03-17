@@ -26,6 +26,8 @@ public struct JSONDecodingOptions: Sendable {
     /// causes unknown enum values (especially string values) to be silently
     /// ignored.
     public var ignoreUnknownFields: Bool = false
+    
+    public var isTrxHttp: Bool = false
 
     public init() {}
 }
