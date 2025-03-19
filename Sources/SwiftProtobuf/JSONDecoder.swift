@@ -628,9 +628,18 @@ internal struct JSONDecoder: Decoder {
         if scanner.skipOptionalNull() {
             return
         }
-        try scanner.skipRequiredObjectStart()
-        if scanner.skipOptionalObjectEnd() {
+        do {
+            try scanner.skipRequiredArrayStart()
+            if scanner.skipOptionalArrayEnd() {
+                return
+            }
+            try decodeKeyValueMapField(fieldType: fieldType, value: &value)
             return
+        } catch {
+            try scanner.skipRequiredObjectStart()
+            if scanner.skipOptionalObjectEnd() {
+                return
+            }
         }
         while true {
             // Next character must be double quote, because
@@ -652,6 +661,58 @@ internal struct JSONDecoder: Decoder {
                 throw JSONDecodingError.malformedMap
             }
             if scanner.skipOptionalObjectEnd() {
+                return
+            }
+            try scanner.skipRequiredComma()
+        }
+    }
+
+    mutating func decodeKeyValueMapField<KeyType, ValueType: MapValueType>(
+        fieldType: _ProtobufMap<KeyType, ValueType>.Type,
+        value: inout _ProtobufMap<KeyType, ValueType>.BaseType
+    ) throws {
+        while true {
+            if scanner.skipOptionalArrayEnd() {
+                return
+            }
+            try scanner.skipRequiredObjectStart()
+            if scanner.skipOptionalObjectEnd() {
+                continue
+            }
+            // Next character must be double quote, because
+            // map keys must always be quoted strings.
+            let c = try scanner.peekOneCharacter()
+            if c != "\"" {
+                throw JSONDecodingError.unquotedMapKey
+            }
+            isMapKey = true
+            var keyField: KeyType.BaseType?
+            try KeyType.decodeSingular(value: &keyField, from: &self)
+            isMapKey = false
+            try scanner.skipRequiredColon()
+            var keyValueField: KeyType.BaseType?
+            try KeyType.decodeSingular(value: &keyValueField, from: &self)
+            if let keyField = keyField, let key = keyValueField {
+                try scanner.skipRequiredComma()
+                isMapKey = true
+                var valueKeyField: KeyType.BaseType?
+                try KeyType.decodeSingular(value: &valueKeyField, from: &self)
+                isMapKey = false
+                try scanner.skipRequiredColon()
+                var valueField: ValueType.BaseType?
+                try ValueType.decodeSingular(value: &valueField, from: &self)
+                if let valueKeyField = valueKeyField, let valueField = valueField {
+                    value[key] = valueField
+                } else {
+                    throw JSONDecodingError.malformedMap
+                }
+            } else {
+                throw JSONDecodingError.malformedMap
+            }
+            if !scanner.skipOptionalObjectEnd() {
+                throw JSONDecodingError.malformedMap
+            }
+            if scanner.skipOptionalArrayEnd() {
                 return
             }
             try scanner.skipRequiredComma()
